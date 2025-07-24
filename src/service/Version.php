@@ -1,6 +1,6 @@
 <?php
 
-namespace plugin\saithink\service;
+namespace Saithink\Saipackage\service;
 
 /**
  * 版本类

@@ -38,7 +38,7 @@ class InstallController extends BaseController
     static array $needDependentVersion = [
         'php'  => '8.1.0',
         'saiadmin'  => '5.1.0',
-        'saithink' => '1.0.0',
+        'saipackage' => '1.0.0',
     ];
 
     /**
@@ -48,7 +48,7 @@ class InstallController extends BaseController
      */
     public function index(Request $request): Response
     {
-        $data = Server::installedList(runtime_path() . DIRECTORY_SEPARATOR . 'saithink' . DIRECTORY_SEPARATOR);
+        $data = Server::installedList(runtime_path() . DIRECTORY_SEPARATOR . 'saipackage' . DIRECTORY_SEPARATOR);
 
         $phpVersion        = phpversion();
         $phpVersionCompare = Version::compare(self::$needDependentVersion['php'], $phpVersion);
@@ -64,11 +64,11 @@ class InstallController extends BaseController
             $saiadminVersionNotes = '需要版本' . ' >= ' . self::$needDependentVersion['saiadmin'];
         }
 
-        $saithinkVersion        = config('plugin.saithink.app.version');
-        $saithinkVersionCompare = Version::compare(self::$needDependentVersion['saithink'], $saithinkVersion);
+        $saithinkVersion        = config('plugin.saipackage.app.version');
+        $saithinkVersionCompare = Version::compare(self::$needDependentVersion['saipackage'], $saithinkVersion);
         $saithinkVersionNotes = '正常';
         if (!$saithinkVersionCompare) {
-            $saithinkVersionNotes = '需要版本' . ' >= ' . self::$needDependentVersion['saithink'];
+            $saithinkVersionNotes = '需要版本' . ' >= ' . self::$needDependentVersion['saipackage'];
         }
 
 
@@ -84,7 +84,7 @@ class InstallController extends BaseController
                     'state'  => $saiadminVersionCompare ? self::$ok : self::$fail,
                     'notes'   => $saiadminVersionNotes,
                 ],
-                'saithink_version' => [
+                'saipackage_version' => [
                     'describe' => $saithinkVersion,
                     'state'  => $saithinkVersionCompare ? self::$ok : self::$fail,
                     'notes'   => $saithinkVersionNotes,

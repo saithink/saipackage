@@ -1,12 +1,12 @@
 <?php
 
-namespace plugin\saithink\app\logic;
+namespace plugin\saipackage\app\logic;
 
 use Throwable;
-use plugin\saithink\service\Server;
-use plugin\saithink\service\Version;
-use plugin\saithink\service\Filesystem;
-use plugin\saithink\service\Depends;
+use Saithink\Saipackage\service\Server;
+use Saithink\Saipackage\service\Version;
+use Saithink\Saipackage\service\Filesystem;
+use Saithink\Saipackage\service\Depends;
 use plugin\saiadmin\exception\ApiException;
 
 class InstallLogic
@@ -40,7 +40,7 @@ class InstallLogic
 
     public function __construct(string $appName = '')
     {
-        $this->installDir = runtime_path() . DIRECTORY_SEPARATOR . 'saithink' . DIRECTORY_SEPARATOR;
+        $this->installDir = runtime_path() . DIRECTORY_SEPARATOR . 'saipackage' . DIRECTORY_SEPARATOR;
         $this->backupsDir = $this->installDir . 'backups' . DIRECTORY_SEPARATOR;
         if (!is_dir($this->installDir)) {
             mkdir($this->installDir, 0755, true);

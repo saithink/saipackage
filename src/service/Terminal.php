@@ -1,6 +1,6 @@
 <?php
 
-namespace plugin\saithink\service;
+namespace Saithink\Saipackage\service;
 
 use plugin\saithink\app\logic\InstallLogic;
 use think\Exception;
@@ -93,7 +93,7 @@ class Terminal
             return false;
         }
 
-        $commands = config('plugin.saithink.terminal.commands', []);
+        $commands = config('plugin.saipackage.terminal.commands', []);
         if (stripos($key, '.')) {
             $keyParts = explode('.', $key);
             if (!isset($commands[$keyParts[0]]) || !is_array($commands[$keyParts[0]]) || !isset($commands[$keyParts[0]][$keyParts[1]])) {
@@ -158,9 +158,16 @@ class Terminal
 
         yield $this->output('> ' . $command['command']);
 
-        $this->process = proc_open($command['command'], $this->descriptorsPec, $this->pipes, $command['cwd']);
-        if (!is_resource($this->process)) {
-            yield $this->output('Error: Failed to execute');
+        if (!is_dir($command['cwd'])) {
+            yield $this->output('Error: dir not exist');
+            yield $this->output('exec-error');
+            return;
+        }
+
+        try {
+            $this->process = proc_open($command['command'], $this->descriptorsPec, $this->pipes, $command['cwd']);
+        } catch (Throwable $e) {
+            yield $this->output('Error: ' . $e->getMessage());
             yield $this->output('exec-error');
             return;
         }
