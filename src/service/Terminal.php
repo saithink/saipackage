@@ -2,10 +2,9 @@
 
 namespace Saithink\Saipackage\service;
 
-use plugin\saithink\app\logic\InstallLogic;
-use think\Exception;
-use Throwable;
+use plugin\saipackage\app\logic\InstallLogic;
 use Tinywan\Jwt\JwtToken;
+use Throwable;
 
 class Terminal
 {
