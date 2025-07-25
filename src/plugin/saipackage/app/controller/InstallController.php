@@ -37,7 +37,7 @@ class InstallController extends BaseController
 
     static array $needDependentVersion = [
         'php'  => '8.1.0',
-        'saiadmin'  => '5.1.0',
+        'saiadmin'  => '5.0.1',
         'saipackage' => '1.0.0',
     ];
 
