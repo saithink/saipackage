@@ -102,12 +102,22 @@ class InstallController extends BaseController
      */
     public function upload(Request $request): Response
     {
-        $file  = $request->post("file", '');
-        if (empty($file)) {
-            return $this->fail('参数错误');
+        $spl_file  = current($request->file());
+        if (!$spl_file->isValid()) {
+            return $this->fail('上传文件校验失败');
+        }
+        $config = config('plugin.saipackage.upload', [
+            'size' => 1024 * 1024 * 5,
+            'type' => ['zip']
+        ]);
+        if (!in_array($spl_file->getUploadExtension(), $config['type'])) {
+            return $this->fail('文件格式上传失败,请选择zip格式文件上传');
+        }
+        if ($spl_file->getSize() > $config['size']) {
+            return $this->fail('文件大小不能超过5M');
         }
         $install = new InstallLogic();
-        $info = $install->upload($file);
+        $info = $install->upload($spl_file);
         return $this->success($info);
     }
 

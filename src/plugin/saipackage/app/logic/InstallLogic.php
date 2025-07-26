@@ -85,20 +85,14 @@ class InstallLogic
 
     /**
      * 上传安装
-     * @param string $file 已经上传完成的文件
+     * @param mixed $file
      * @return array 模块的基本信息
      * @throws Throwable
      */
-    public function upload(string $file): array
+    public function upload(mixed $file): array
     {
-        $file = Filesystem::fsFit(base_path() . DIRECTORY_SEPARATOR . $file);
-        if (!is_file($file)) {
-            // 包未找到
-            throw new ApiException('Zip文件未找到');
-        }
-
         $copyTo = $this->installDir . 'uploadTemp' . date('YmdHis') . '.zip';
-        copy($file, $copyTo);
+        $file->move($copyTo);
 
         // 解压
         $copyToDir = Filesystem::unzip($copyTo);
