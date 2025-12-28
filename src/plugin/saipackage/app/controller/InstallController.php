@@ -167,4 +167,220 @@ class InstallController extends BaseController
         return $this->success('重载成功');
     }
 
+    // ========== 商店代理接口 ==========
+
+    /**
+     * 代理请求封装
+     */
+    protected function proxyRequest(string $url, string $method = 'GET', ?string $token = null, ?array $postData = null, int $timeout = 10): array
+    {
+        $headers = [];
+        if ($token) {
+            $headers[] = "Authorization: Bearer {$token}";
+        }
+        if ($postData !== null) {
+            $headers[] = "Content-Type: application/json";
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => $method,
+                'header' => implode("\r\n", $headers),
+                'content' => $postData ? json_encode($postData) : null,
+                'timeout' => $timeout,
+            ],
+            'ssl' => [
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+            ],
+        ]);
+
+        $response = file_get_contents($url, false, $context);
+
+        if ($response === false) {
+            return ['success' => false, 'message' => '请求失败'];
+        }
+
+        // 尝试解析 JSON
+        $data = json_decode($response, true);
+        if ($data && isset($data['code'])) {
+            if ($data['code'] === 200) {
+                return ['success' => true, 'data' => $data['data'] ?? null];
+            }
+            return ['success' => false, 'message' => $data['message'] ?? '请求失败'];
+        }
+
+        // 非 JSON 响应（可能是文件）
+        return ['success' => true, 'raw' => $response, 'headers' => $http_response_header ?? []];
+    }
+
+    /**
+     * 获取应用商店列表
+     */
+    public function appList(Request $request): Response
+    {
+        $params = http_build_query([
+            'page' => $request->input('page', 1),
+            'limit' => $request->input('limit', 15),
+            'price' => $request->input('price', 'all'),
+            'type' => $request->input('type', ''),
+            'keywords' => $request->input('keywords', ''),
+        ]);
+
+        $result = $this->proxyRequest("https://saas.saithink.top/api/app/appstore/store/appList?{$params}");
+
+        return $result['success']
+            ? $this->success($result['data'])
+            : $this->fail($result['message']);
+    }
+
+    /**
+     * 获取商店验证码
+     */
+    public function storeCaptcha(): Response
+    {
+        $result = $this->proxyRequest("https://saas.saithink.top/api/app/appstore/index/captcha");
+
+        return $result['success']
+            ? $this->success($result['data'])
+            : $this->fail($result['message']);
+    }
+
+    /**
+     * 商店登录
+     */
+    public function storeLogin(Request $request): Response
+    {
+        $result = $this->proxyRequest(
+            "https://saas.saithink.top/api/app/appstore/index/login",
+            'POST',
+            null,
+            [
+                'username' => $request->input('username'),
+                'password' => $request->input('password'),
+                'code' => $request->input('code'),
+                'uuid' => $request->input('uuid'),
+            ]
+        );
+
+        return $result['success']
+            ? $this->success($result['data'])
+            : $this->fail($result['message']);
+    }
+
+    /**
+     * 获取商店用户信息
+     */
+    public function storeUserInfo(Request $request): Response
+    {
+        $token = $request->input('token');
+        if (empty($token)) {
+            return $this->fail('未登录');
+        }
+
+        $result = $this->proxyRequest(
+            "https://saas.saithink.top/api/app/appstore/user/info",
+            'GET',
+            $token
+        );
+
+        return $result['success']
+            ? $this->success($result['data'])
+            : $this->fail($result['message']);
+    }
+
+    /**
+     * 获取已购应用列表
+     */
+    public function storePurchasedApps(Request $request): Response
+    {
+        $token = $request->input('token');
+        if (empty($token)) {
+            return $this->fail('未登录');
+        }
+
+        $result = $this->proxyRequest(
+            "https://saas.saithink.top/api/app/appstore/user/appList",
+            'GET',
+            $token
+        );
+
+        return $result['success']
+            ? $this->success($result['data'])
+            : $this->fail($result['message']);
+    }
+
+    /**
+     * 获取应用版本列表
+     */
+    public function storeAppVersions(Request $request): Response
+    {
+        $token = $request->input('token');
+        $appId = $request->input('app_id');
+
+        if (empty($token)) {
+            return $this->fail('未登录');
+        }
+
+        $result = $this->proxyRequest(
+            "https://saas.saithink.top/api/app/appstore/user/versionList?app_id={$appId}",
+            'GET',
+            $token
+        );
+
+        return $result['success']
+            ? $this->success($result['data'])
+            : $this->fail($result['message']);
+    }
+
+    /**
+     * 下载应用 - 下载并调用 InstallLogic 处理
+     */
+    public function storeDownloadApp(Request $request): Response
+    {
+        $token = $request->input('token');
+        $versionId = $request->input('id');
+
+        if (empty($token)) {
+            return $this->fail('未登录');
+        }
+
+        if (empty($versionId)) {
+            return $this->fail('版本ID不能为空');
+        }
+
+        $result = $this->proxyRequest(
+            "https://saas.saithink.top/api/app/appstore/user/downloadApp",
+            'POST',
+            $token,
+            ['id' => (int)$versionId],
+            60
+        );
+
+        if (!$result['success']) {
+            return $this->fail($result['message'] ?? '下载失败');
+        }
+
+        if (!isset($result['raw'])) {
+            return $this->fail('下载失败');
+        }
+
+        // 保存临时 zip 文件
+        $tempZip = runtime_path() . DIRECTORY_SEPARATOR . 'saipackage' . DIRECTORY_SEPARATOR . 'downloadTemp' . date('YmdHis') . '.zip';
+        if (!is_dir(dirname($tempZip))) {
+            mkdir(dirname($tempZip), 0755, true);
+        }
+        file_put_contents($tempZip, $result['raw']);
+
+        try {
+            // 调用 InstallLogic 处理
+            $install = new InstallLogic();
+            $info = $install->uploadFromPath($tempZip);
+
+            return $this->success($info, '下载成功，请在插件列表中安装');
+        } catch (Throwable $e) {
+            @unlink($tempZip);
+            return $this->fail($e->getMessage());
+        }
+    }
 }

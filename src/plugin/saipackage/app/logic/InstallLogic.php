@@ -158,6 +158,76 @@ class InstallLogic
     }
 
     /**
+     * 从本地 zip 文件路径安装（用于在线下载后安装）
+     * @param string $zipPath zip 文件完整路径
+     * @return array 模块的基本信息
+     * @throws Throwable
+     */
+    public function uploadFromPath(string $zipPath): array
+    {
+        if (!is_file($zipPath)) {
+            throw new ApiException('文件不存在');
+        }
+
+        // 解压
+        $copyToDir = Filesystem::unzip($zipPath);
+        $copyToDir .= DIRECTORY_SEPARATOR;
+
+        // 删除 zip
+        @unlink($zipPath);
+
+        // 读取 ini
+        $info = Server::getIni($copyToDir);
+        if (empty($info['app'])) {
+            Filesystem::delDir($copyToDir);
+            throw new ApiException('插件的基础配置信息错误');
+        }
+
+        $this->appName = $info['app'];
+        $this->appDir  = $this->installDir . $info['app'] . DIRECTORY_SEPARATOR;
+
+        $upgrade = false;
+        if (is_dir($this->appDir)) {
+            $oldInfo = $this->getInfo();
+            if ($oldInfo && !empty($oldInfo['app'])) {
+                $versions = explode('.', $oldInfo['version']);
+                if (isset($versions[2])) {
+                    $versions[2]++;
+                }
+                $nextVersion = implode('.', $versions);
+                $upgrade     = Version::compare($nextVersion, $info['version']);
+                if (!$upgrade) {
+                    Filesystem::delDir($copyToDir);
+                    throw new ApiException('插件已经存在');
+                }
+            }
+
+            if (Filesystem::dirIsEmpty($this->appDir) || (!Filesystem::dirIsEmpty($this->appDir) && !$upgrade)) {
+                Filesystem::delDir($copyToDir);
+                throw new ApiException('该插件的安装目录已经被占用');
+            }
+        }
+
+        $newInfo = ['state' => self::WAIT_INSTALL];
+        if ($upgrade) {
+            $newInfo['update'] = 1;
+            Filesystem::delDir($this->appDir);
+        }
+
+        // 放置新模块
+        rename($copyToDir, $this->appDir);
+
+        // 检查新包是否完整
+        $this->checkPackage();
+
+        // 设置为待安装状态
+        $this->setInfo($newInfo);
+
+        return $info;
+    }
+
+    
+    /**
      * 安装或更新
      * @return array
      * @throws Throwable
