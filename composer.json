@@ -1,0 +1,20 @@
+{
+    "name": "saithink/saipackage",
+    "description": "saiadmin plugin",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "nelexa/zip": "4.x"
+    },
+    "autoload": {
+        "psr-4": {
+            "Saithink\\Saipackage\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "saithink",
+            "email": "1430792918@qq.com"
+        }
+    ]
+}
