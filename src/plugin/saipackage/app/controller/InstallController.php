@@ -2,6 +2,7 @@
 
 namespace plugin\saipackage\app\controller;
 
+use plugin\saiadmin\app\cache\UserMenuCache;
 use plugin\saiadmin\app\middleware\SystemLog;
 use plugin\saiadmin\app\middleware\CheckLogin;
 use plugin\saiadmin\basic\BaseController;
@@ -135,6 +136,7 @@ class InstallController extends BaseController
         }
         $install = new InstallLogic($appName);
         $info = $install->install();
+        UserMenuCache::clearMenuCache();
         return $this->success($info);
     }
 
@@ -152,6 +154,7 @@ class InstallController extends BaseController
         }
         $install = new InstallLogic($appName);
         $install->uninstall();
+        UserMenuCache::clearMenuCache();
         return $this->success('卸载插件成功');
     }
 
