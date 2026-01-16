@@ -288,7 +288,18 @@ class InstallLogic
     {
         $state = $this->getInstallState();
         if ($state != self::INSTALLED) {
-            throw new ApiException('插件未安装完成,无法卸载');
+            echo PHP_EOL . '删除插件[' . $this->appName . ']' . PHP_EOL;
+            $pathRelation = $this->getAllowedPath();
+            foreach ($pathRelation as $key => $value) {
+                if (is_dir($value)) {
+                    Filesystem::delDir($value);
+                }
+            }
+
+            // 删除临时目录
+            Filesystem::delDir($this->appDir);
+
+            return;
         }
 
         echo '开始卸载[' . $this->appName .']'. PHP_EOL;
