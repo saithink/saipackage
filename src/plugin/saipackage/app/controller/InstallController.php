@@ -230,7 +230,7 @@ class InstallController extends BaseController
             'keywords' => $request->input('keywords', ''),
         ]);
 
-        $result = $this->proxyRequest("https://saas.saithink.top/api/app/appstore/store/appList?{$params}");
+        $result = $this->proxyRequest("https://saas.saithink.top/dev-api/app/saistore/api/store/appList?{$params}");
 
         return $result['success']
             ? $this->success($result['data'])
@@ -242,7 +242,7 @@ class InstallController extends BaseController
      */
     public function storeCaptcha(): Response
     {
-        $result = $this->proxyRequest("https://saas.saithink.top/api/app/appstore/index/captcha");
+        $result = $this->proxyRequest("https://saas.saithink.top/dev-api/app/saiuser/api/common/index/captcha");
 
         return $result['success']
             ? $this->success($result['data'])
@@ -255,7 +255,7 @@ class InstallController extends BaseController
     public function storeLogin(Request $request): Response
     {
         $result = $this->proxyRequest(
-            "https://saas.saithink.top/api/app/appstore/index/login",
+            "https://saas.saithink.top/dev-api/app/saiuser/api/common/index/accountLogin",
             'POST',
             null,
             [
@@ -282,7 +282,7 @@ class InstallController extends BaseController
         }
 
         $result = $this->proxyRequest(
-            "https://saas.saithink.top/api/app/appstore/user/info",
+            "https://saas.saithink.top/dev-api/app/saiuser/api/user/user/userInfo",
             'GET',
             $token
         );
@@ -303,7 +303,7 @@ class InstallController extends BaseController
         }
 
         $result = $this->proxyRequest(
-            "https://saas.saithink.top/api/app/appstore/user/appList",
+            "https://saas.saithink.top/dev-api/app/saistore/api/StoreOrder/orderList?saiType=all",
             'GET',
             $token
         );
@@ -326,7 +326,7 @@ class InstallController extends BaseController
         }
 
         $result = $this->proxyRequest(
-            "https://saas.saithink.top/api/app/appstore/user/versionList?app_id={$appId}",
+            "https://saas.saithink.top/dev-api/app/saistore/api/StoreOrder/appVersionList?app_id={$appId}",
             'GET',
             $token
         );
@@ -353,10 +353,10 @@ class InstallController extends BaseController
         }
 
         $result = $this->proxyRequest(
-            "https://saas.saithink.top/api/app/appstore/user/downloadApp",
+            "https://saas.saithink.top/dev-api/app/saistore/api/StoreOrder/downloadVersion",
             'POST',
             $token,
-            ['id' => (int) $versionId],
+            ['version_id' => (int) $versionId],
             60
         );
 
