@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ocr"
+  ],
+  "properties": {
+    "ocr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "apiKey"
+      ],
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "title": "Endpoint"
+        },
+        "apiKey": {
+          "type": "string",
+          "writeOnly": true,
+          "minLength": 1,
+          "title": "API key"
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 60,
+          "title": "Timeout"
+        }
+      }
+    }
+  },
+  "ui": {
+    "fields": {
+      "ocr.timeout": {
+        "connection": false
+      }
+    }
+  }
+}

@@ -3,6 +3,8 @@
 namespace plugin\saipackage\app\logic;
 
 use Throwable;
+use Saithink\Saipackage\management\Factory;
+use Saithink\Saipackage\management\Manifest;
 use Workerman\Timer;
 use Saithink\Saipackage\service\Server;
 use Saithink\Saipackage\service\Version;
@@ -130,7 +132,8 @@ class InstallLogic
     {
         if (DIRECTORY_SEPARATOR === '/') {
             self::monitorResume();
-            return Server::restart();
+            Timer::add(0.5, static fn () => Server::restart(), [], false);
+            return true;
         }
 
         // 延后 1 秒，先让当前请求的响应发出去，再恢复监控并触发重启。
@@ -266,18 +269,33 @@ class InstallLogic
         }
 
         foreach ($paths as $source => $dest) {
+            if ($clean && is_dir($dest)) {
+                Filesystem::delDir($dest);
+                if (is_dir($dest)) throw new ApiException('旧插件文件未能清理，请检查权限后恢复任务');
+            }
             if (!is_dir($source)) {
-                // 插件可以只有后端或只有前端
+                // A release can remove its entire frontend/backend subtree; the backed-up old tree must go too.
                 continue;
             }
             $parent = dirname($dest);
             if (!is_dir($parent) && !mkdir($parent, 0755, true) && !is_dir($parent)) {
                 throw new ApiException('目录创建失败，请检查写入权限：' . $parent);
             }
-            if ($clean && is_dir($dest)) {
-                Filesystem::delDir($dest);
-            }
             copy_dir($source, $dest, true);
+        }
+        $this->assertInstalledFiles();
+    }
+
+    /** Do not activate a partial copy or finalize a recovery against a different deployed payload. */
+    protected function assertInstalledFiles(): void
+    {
+        foreach ($this->getAllowedPath() as $source => $dest) {
+            if (!is_dir($source)) continue;
+            foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS)) as $file) {
+                if (!$file->isFile()) continue;
+                $target = $dest . substr($file->getPathname(), strlen($source));
+                if (!is_file($target) || is_link($target) || hash_file('sha256', $file->getPathname()) !== hash_file('sha256', $target)) throw new ApiException('插件文件复制不完整，请检查权限后恢复任务');
+            }
         }
     }
 
@@ -306,7 +324,7 @@ class InstallLogic
             return '';
         }
 
-        $zip = $this->backupsDir . $this->appName . '-' . $tag . '-' . date('YmdHis') . '.zip';
+        $zip = $this->backupsDir . $this->appName . '-' . $tag . '-' . date('YmdHis') . '-' . bin2hex(random_bytes(6)) . '.zip';
         try {
             // zipDir() 打包失败会抛异常，写不出文件时返回 false，两种都要接
             if (!Filesystem::zipDir($backFiles, $zip)) {
@@ -357,8 +375,18 @@ class InstallLogic
      */
     protected function unpack(string $zipPath): array
     {
+        $management = Factory::enabled() ? Factory::manager() : null;
+        $globalLock = $management?->lock();
+        $management?->importLegacy();
         // 解压
-        $copyToDir = Filesystem::unzip($zipPath) . DIRECTORY_SEPARATOR;
+        // Extract on the destination filesystem; rename() cannot move directories across mounts.
+        $unpackDir = $this->installDir . '.unpack-' . bin2hex(random_bytes(12));
+        try {
+            $copyToDir = Filesystem::unzip($zipPath, $unpackDir) . DIRECTORY_SEPARATOR;
+        } catch (Throwable $e) {
+            if (is_dir($unpackDir)) Filesystem::delDir($unpackDir);
+            throw $e;
+        }
 
         // 删除 zip
         @unlink($zipPath);
@@ -372,6 +400,8 @@ class InstallLogic
             // 原来是 rename 之后才 checkPackage()，包里缺个 about 就把已安装插件的记录删了，
             // 插件从列表消失、getInstallState() 变回未安装，代码和数据库却还在，彻底没法管
             $this->checkPackageInfo($info);
+            Manifest::read($copyToDir, $info);
+            Manifest::schema($copyToDir);
             $this->setAppName($info['app']);
         } catch (Throwable $e) {
             Filesystem::delDir($copyToDir);
@@ -389,6 +419,14 @@ class InstallLogic
         }
 
         $upgrade = false;
+        $installed = $management?->store->get('installations', $this->appName)['value'] ?? null;
+        if ($installed && $installed['state'] !== 'uninstalled') {
+            $upgrade = Manifest::matches((string) ($info['version'] ?? ''), '>' . $installed['manifest']['version']);
+            if (!$upgrade) {
+                Filesystem::delDir($copyToDir);
+                throw new ApiException('插件已经存在');
+            }
+        }
         if (is_dir($this->appDir)) {
             $oldInfo = $this->getInfo();
             if ($oldInfo && !empty($oldInfo['app'])) {
@@ -396,11 +434,15 @@ class InstallLogic
                 // 版本号写成两段（如 6.1）时 nextVersion 与旧版本完全相同，
                 // 而 Version::compare() 相等即为真 —— 重复上传同一个包会被当成升级，
                 // 直接把线上那份覆盖掉（升级路径还会删旧目录）
-                $old = ltrim((string) ($oldInfo['version'] ?? ''), 'vV') ?: '0.0.0';
+                $baseline = $installed && $installed['state'] !== 'uninstalled' ? $installed['manifest']['version'] : ($oldInfo['version'] ?? '');
+                $old = ltrim((string) $baseline, 'vV') ?: '0.0.0';
                 $versions = array_slice(array_pad(explode('.', $old), 3, '0'), 0, 3);
                 $versions[2] = (int) $versions[2] + 1;
                 $nextVersion = implode('.', $versions);
-                $upgrade = Version::compare($nextVersion, $info['version'] ?? '');
+                // Managed releases use SemVer, including beta -> stable without a patch bump.
+                $upgrade = $management
+                    ? Manifest::matches((string) ($info['version'] ?? ''), '>' . $old)
+                    : Version::compare($nextVersion, $info['version'] ?? '');
                 if (!$upgrade) {
                     Filesystem::delDir($copyToDir);
                     throw new ApiException('插件已经存在');
@@ -416,8 +458,6 @@ class InstallLogic
                 throw new ApiException('该插件的安装目录已经被占用');
             }
 
-            // 清理旧目录，保证下面的 rename 能落地
-            Filesystem::delDir($this->appDir);
         }
 
         $newInfo = ['state' => self::WAIT_INSTALL];
@@ -425,15 +465,27 @@ class InstallLogic
             $newInfo['update'] = 1;
         }
 
-        // 放置新模块
-        if (!rename($copyToDir, $this->appDir)) {
+        // Keep the old staging record until the replacement is registered, including rename failures.
+        $previous = $this->installDir . '.previous-' . bin2hex(random_bytes(12));
+        $hadPrevious = is_dir($this->appDir);
+        if ($hadPrevious && !rename(rtrim($this->appDir, DIRECTORY_SEPARATOR), $previous)) {
             Filesystem::delDir($copyToDir);
-            throw new ApiException('插件文件写入失败，请检查 runtime 目录的写入权限');
+            throw new ApiException('插件暂存记录备份失败，请检查 runtime 目录权限');
         }
-
-        // state 由安装器维护，不该要求打包方预置，所以放在完整性校验之后再写
-        $this->setInfo($newInfo);
-        $this->checkPackage();
+        try {
+            if (!rename($copyToDir, $this->appDir)) throw new ApiException('插件文件写入失败，请检查 runtime 目录的写入权限');
+            // state 由安装器维护，不该要求打包方预置，所以放在完整性校验之后再写
+            if (!$this->setInfo($newInfo)) throw new ApiException('插件暂存状态写入失败');
+            $this->checkPackage();
+            $management?->registerPackage($this->appName);
+        } catch (Throwable $e) {
+            Filesystem::delDir($this->appDir);
+            if ($hadPrevious && !rename($previous, $this->appDir)) throw new ApiException('插件暂存记录恢复失败，请保留 .previous 目录并人工核查');
+            throw $e;
+        } finally {
+            if (is_dir($copyToDir)) Filesystem::delDir($copyToDir);
+        }
+        if ($hadPrevious) Filesystem::delDir($previous);
 
         return $info;
     }
@@ -444,14 +496,36 @@ class InstallLogic
      * @return array
      * @throws Throwable
      */
-    public function install(): array
+    public function install(bool $restart = true, ?array $approvedSnapshot = null, ?callable $progress = null): array
     {
+        $management = Factory::enabled() ? Factory::manager() : null;
+        $globalLock = $management?->lock();
+        $management?->importLegacy();
+        $snapshot = $management ? ($approvedSnapshot ? $management->assertPlanStep($this->appName, $approvedSnapshot) : $management->assertSingleInstall($this->appName)) : null;
+        $settingsChange = $management && $snapshot ? $management->previewSettings($snapshot) : null;
+        if ($management && $snapshot) {
+            \Saithink\Saipackage\management\UpgradeServices::assertCompatible($management, Factory::services($management), $snapshot, $settingsChange);
+        }
         // 上锁再读状态：双击安装按钮会并发进来两个请求，两个都能过状态检查，
         // 然后同时往 plugin/{app} 复制文件、同时跑 migrate 抢 phinxlog_{app}，
         // 最后各自重启一次后端。$lock 活到方法返回为止（异常退出也会释放）
         $lock = $this->acquireLock();
 
         $state = $this->getInstallState();
+        $installation = $management?->store->get('installations', $this->appName)['value'] ?? [];
+        if ($state == self::INSTALLED && $snapshot && isset($installation['pending']) && ($installation['state'] ?? '') !== 'installed'
+            && ($installation['pending']['fingerprint'] ?? '') === $snapshot['fingerprint']) {
+            // A crash can occur after libraries set info.ini=1 but before recording the installed snapshot.
+            // Only an explicit task retry reaches here; verify files and finalize without repeating SQL/seeds.
+            $this->assertInstalledFiles();
+            $progress && $progress('settings');
+            $management->settings->commitMigration($this->appName, $settingsChange);
+            $management->recordInstalled($this->appName, $snapshot);
+            $fresh = $this->getInfo(); unset($fresh['update']); $this->setInfo([], $fresh);
+            UserMenuCache::clearMenuCache();
+            if ($restart) self::restartServer(); else self::monitorResume();
+            return $this->getInfo();
+        }
         if ($state == self::INSTALLED || $state == self::DIRECTORY_OCCUPIED) {
             throw new ApiException('插件已经存在');
         }
@@ -487,6 +561,9 @@ class InstallLogic
             $migrator->validate($stagedDb);
         }
 
+        // Preflight code-library declarations before changing plugin files or database.
+        if ($management) $this->preflightLibraryDependencies();
+        if ($management && $snapshot) $management->begin($this->appName, $snapshot);
         // 安装全程关掉文件监控，理由见 monitorPause()
         self::monitorPause();
 
@@ -495,9 +572,11 @@ class InstallLogic
             // 原来的顺序是 SQL -> 依赖处理(置为已安装) -> 复制文件，
             // 一旦复制失败就会留下「状态是已安装、代码却不存在」的残局，
             // 重装被拦为"插件已经存在"，只能先卸载才能恢复
+            $progress && $progress('files');
             echo '安装文件' . PHP_EOL;
             $this->installFiles();
 
+            $progress && $progress('database');
             if ($hasMigration) {
                 // 首装与升级都是同一条 migrate，进度记在 phinxlog_{app} 里
                 echo '执行数据库迁移' . PHP_EOL;
@@ -506,12 +585,13 @@ class InstallLogic
                 // 种子只在首装灌一次：升级时 unpack() 也会把 state 置为待安装，
                 // 真正区分首装和升级的是 update 标记
                 if (empty($info['update']) && empty($info['seeded']) && $migrator->hasSeeds()) {
+                    $progress && $progress('seed');
                     echo '初始化数据' . PHP_EOL;
                     $migrator->seed();
                     $this->setInfo(['seeded' => 1]);
                 }
             } else {
-                if ($state == self::WAIT_INSTALL) {
+                if ($state == self::WAIT_INSTALL && empty($info['update'])) {
                     echo '安装数据库' . PHP_EOL;
                     $sql = $this->appDir . 'install.sql';
                     Server::importSql($sql);
@@ -524,30 +604,43 @@ class InstallLogic
                 }
             }
 
-            if (isset($info['update']) && $info['update'] == 1) {
-                // 重新读一次再写回，别把上面刚写进去的 seeded 标记覆盖掉
-                $fresh = $this->getInfo();
-                unset($fresh['update']);
-                $this->setInfo([], $fresh);
+            $progress && $progress('settings');
+            if ($management && $snapshot) {
+                $management->settings->commitMigration($this->appName, $settingsChange);
             }
 
+            $progress && $progress('libraries');
             // 依赖检查
             $this->dependConflictHandle();
 
             // 依赖更新
             echo '依赖更新' . PHP_EOL;
             $this->dependUpdateHandle();
+            // Preserve upgrade semantics across failures; retry must not execute first-install SQL/seeds.
+            if (!empty($info['update'])) {
+                $fresh = $this->getInfo();
+                unset($fresh['update']);
+                $this->setInfo([], $fresh);
+            }
         } catch (Throwable $e) {
             // 失败也要把监控放回去，否则热重载会一直是关着的
             self::monitorResume();
+            $management?->mark($this->appName, 'failed');
             throw $e;
+        }
+
+        if ($management && $snapshot && (int) $this->getInfo()['state'] === self::INSTALLED) {
+            $management->recordInstalled($this->appName, $snapshot);
+        } elseif ($management) {
+            $management->mark($this->appName, 'waiting_dependencies');
         }
 
         // 清理菜单缓存
         UserMenuCache::clearMenuCache();
 
         // 重启后端
-        self::restartServer();
+        if ($restart) self::restartServer();
+        else self::monitorResume();
 
         // 上面几步改过 state，重新读一次再返回，否则前端拿到的是过期状态
         return $this->getInfo();
@@ -557,12 +650,25 @@ class InstallLogic
      * @return array 卸载过程中的警告（数据库步骤被跳过或没清干净时）
      * @throws Throwable
      */
-    public function uninstall(): array
+    public function uninstall(bool $restart = true, ?callable $progress = null): array
     {
+        $management = Factory::enabled() ? Factory::manager() : null;
+        $globalLock = $management?->lock();
+        $management?->importLegacy();
         // 与安装、上传共用一把锁，理由见 install()
         $lock = $this->acquireLock();
 
         $state = $this->getInstallState();
+        $managedInstallation = $management?->store->get('installations', $this->appName)['value'] ?? null;
+        if ($managedInstallation && $managedInstallation['state'] !== 'uninstalled') {
+            $management->assertRemovable($this->appName);
+            $drain = config('plugin.saipackage.management.drain');
+            if (!is_callable($drain) || $drain($this->appName) !== true) {
+                throw new ApiException('请配置并完成插件业务任务排空检查后卸载');
+            }
+            $management->mark($this->appName, 'uninstalling');
+            $state = self::INSTALLED;
+        }
         if ($state != self::INSTALLED) {
             // 插件还没安装成功（待安装 / 目录被占），只清理 runtime 下的暂存包。
             // 这里绝不能去删 plugin/{app} 和前端 views 目录：
@@ -570,6 +676,7 @@ class InstallLogic
             // 一删就没有任何恢复手段
             echo PHP_EOL . '清理插件暂存包[' . $this->appName . ']' . PHP_EOL;
             Filesystem::delDir($this->appDir);
+            $management?->discardPackage($this->appName);
 
             return [];
         }
@@ -587,6 +694,7 @@ class InstallLogic
             // 备份必须排在数据库之前。迁移的 down() 会 drop 表、删菜单，rollback 一旦中途失败
             // （down() 写错、外键挡着）异常就直接抛出去了，原来放在后面的备份根本执行不到 ——
             // 数据库被改了一半，文件却一份副本都没留下。文件备份不依赖数据库，先做没有代价
+            $progress && $progress('backup');
             echo '备份文件' . PHP_EOL;
             $pathRelation = $this->getAllowedPath();
             $failed = $this->backupInstalled('uninstall', $pathRelation);
@@ -594,6 +702,7 @@ class InstallLogic
                 $warnings[] = '文件备份失败，本次卸载没有留下可恢复的副本：' . $failed;
             }
 
+            $progress && $progress('database');
             echo '卸载数据库' . PHP_EOL;
             if ($hasMigration) {
                 // 回滚到 0：每个迁移的 down() 都跑一遍，表和菜单真删。
@@ -607,10 +716,21 @@ class InstallLogic
                 // 但卸载绝不能被数据库步骤卡住 —— 否则用户既装不上也删不掉
                 $warnings[] = '该插件为老版 MySQL 包，当前数据库为 PostgreSQL，已跳过 uninstall.sql，数据库中的表与菜单需要手工清理。';
             } else {
-                $sql = $this->appDir . 'uninstall.sql';
-                Server::importSql($sql);
+                if ($managedInstallation && $managedInstallation['uninstallSql'] !== null) {
+                    $sql = tempnam($this->installDir, '.uninstall-');
+                    try {
+                        file_put_contents($sql, $managedInstallation['uninstallSql']);
+                        Server::importSql($sql);
+                    } finally {
+                        @unlink($sql);
+                    }
+                } else {
+                    $sql = $this->appDir . 'uninstall.sql';
+                    Server::importSql($sql);
+                }
             }
 
+            $progress && $progress('files');
             echo '卸载文件' . PHP_EOL;
             foreach ($pathRelation as $value) {
                 if (is_dir($value)) {
@@ -622,14 +742,19 @@ class InstallLogic
             Filesystem::delDir($this->appDir);
         } catch (Throwable $e) {
             self::monitorResume();
+            $management?->mark($this->appName, 'failed');
             throw $e;
         }
+
+        $management?->mark($this->appName, 'uninstalled');
+        $management?->discardPackage($this->appName);
 
         // 清理菜单缓存
         UserMenuCache::clearMenuCache();
 
         // 重启后端
-        self::restartServer();
+        if ($restart) self::restartServer();
+        else self::monitorResume();
 
         return $warnings;
     }
@@ -682,6 +807,8 @@ class InstallLogic
      */
     public function dependentInstallComplete(string $type): void
     {
+        $management = Factory::enabled() ? Factory::manager() : null;
+        $globalLock = $management?->lock();
         $info = $this->getInfo();
         if ($info['state'] == self::DEPENDENT_WAIT_INSTALL) {
             if ($type == 'npm') {
@@ -697,6 +824,9 @@ class InstallLogic
                 $info['state'] = self::INSTALLED;
             }
             $this->setInfo([], $info);
+            if ($management && (int) $info['state'] === self::INSTALLED) {
+                $management->recordInstalled($this->appName, $management->registerPackage($this->appName));
+            }
         }
     }
 
@@ -736,7 +866,7 @@ class InstallLogic
 
         // 备份将被覆盖的文件
         if ($coverFiles) {
-            $backupsZip = $this->backupsDir . $this->appName . '-cover-' . date('YmdHis') . '.zip';
+            $backupsZip = $this->backupsDir . $this->appName . '-cover-' . date('YmdHis') . '-' . bin2hex(random_bytes(6)) . '.zip';
             Filesystem::zip($coverFiles, $backupsZip);
         }
 
@@ -756,9 +886,19 @@ class InstallLogic
                 }
                 if ($key == 'require') {
                     $composer = true;
+                    foreach ($item as $name => &$constraint) {
+                        $existing = $serverDep->hasDepend($name);
+                        if (Factory::enabled() && $existing !== false) $constraint = \Saithink\Saipackage\management\LibraryConstraints::intersect($existing, $constraint);
+                    }
+                    unset($constraint);
                     $serverDep->addDepends($item, false, true);
                 } elseif ($key == 'require-dev') {
                     $composer = true;
+                    foreach ($item as $name => &$constraint) {
+                        $existing = $serverDep->hasDepend($name, true);
+                        if (Factory::enabled() && $existing !== false) $constraint = \Saithink\Saipackage\management\LibraryConstraints::intersect($existing, $constraint);
+                    }
+                    unset($constraint);
                     $serverDep->addDepends($item, true, true);
                 } elseif ($key == 'dependencies') {
                     $npm = true;
@@ -812,6 +952,26 @@ class InstallLogic
                 $this->setInfo([
                     'state' => self::INSTALLED,
                 ]);
+            }
+        }
+    }
+
+    /** Refuse incompatible root declarations instead of silently overwriting them. */
+    protected function preflightLibraryDependencies(): void
+    {
+        $depends = Server::getDepend($this->appDir);
+        foreach ($depends as $kind => $items) {
+            $composer = in_array($kind, ['require', 'require-dev'], true);
+            $file = $composer ? base_path() . '/composer.json' : self::frontendDir() . '/package.json';
+            $current = is_file($file) ? json_decode(file_get_contents($file), true, 512, JSON_THROW_ON_ERROR) : [];
+            foreach ($items as $name => $constraint) {
+                $existing = $current[$kind][$name] ?? null;
+                if ($existing === null || $existing === $constraint) continue;
+                // npm constraints include protocols/URLs; don't pretend Composer can resolve those.
+                if (!$composer || !\Composer\Semver\Intervals::haveIntersections(
+                    (new \Composer\Semver\VersionParser())->parseConstraints($existing),
+                    (new \Composer\Semver\VersionParser())->parseConstraints($constraint)
+                )) throw new ApiException('代码库依赖声明冲突：' . $name);
             }
         }
     }

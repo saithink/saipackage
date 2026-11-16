@@ -12,3 +12,12 @@ Route::group('/tool/install', function () {
     Route::get('/online/storeAppVersions', [plugin\saipackage\app\controller\InstallController::class, 'storeAppVersions']);
     Route::post('/online/storeDownloadApp', [plugin\saipackage\app\controller\InstallController::class, 'storeDownloadApp']);
 });
+
+Route::group('/tool/install/management', function () {
+    foreach (['catalog', 'tasks', 'settings', 'docs', 'updates'] as $action) {
+        Route::get('/' . $action, [\plugin\saipackage\app\controller\ManagementController::class, $action]);
+    }
+    foreach (['plan', 'submit', 'recover', 'saveSettings', 'clearSettings', 'probe', 'enable', 'uninstallPlan', 'checkUpdates', 'prepareUpdate', 'updatePlan', 'confirmUpdate'] as $action) {
+        Route::post('/' . $action, [\plugin\saipackage\app\controller\ManagementController::class, $action]);
+    }
+});

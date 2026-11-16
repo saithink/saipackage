@@ -1,5 +1,5 @@
 <?php
 
 return [
-    '' => \plugin\saiadmin\app\exception\Handler::class,
+    '' => \plugin\saipackage\app\exception\Handler::class,
 ];

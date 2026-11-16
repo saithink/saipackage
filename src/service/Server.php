@@ -99,7 +99,8 @@ class Server
         $installedDir  = scandir($dir);
         $installedList = [];
         foreach ($installedDir as $item) {
-            if ($item === '.' or $item === '..' || is_file($dir . $item)) {
+            // Installer-owned .unpack/.previous directories are recovery artifacts, not plugin records.
+            if (str_starts_with($item, '.') || is_file($dir . $item)) {
                 continue;
             }
             $tempDir = $dir . $item . DIRECTORY_SEPARATOR;

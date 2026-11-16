@@ -1,0 +1,14 @@
+# Reference only: users run Compose themselves. saipackage never executes this file.
+# Set OCR_IMAGE to a trusted image pinned to an explicit version or digest.
+services:
+  ocr:
+    image: ${OCR_IMAGE:?Set a trusted versioned OCR image}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${OCR_PORT:-18080}:8080"
+    environment:
+      API_KEY: ${OCR_API_KEY:?Set an independent API key}
+    volumes:
+      - ocr-data:/data
+volumes:
+  ocr-data:

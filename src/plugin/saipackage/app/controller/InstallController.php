@@ -15,6 +15,8 @@ use support\annotation\Middleware;
 use support\Request;
 use support\Response;
 use Throwable;
+use Saithink\Saipackage\management\Factory;
+use Saithink\Saipackage\management\Tasks;
 
 #[Middleware(CheckLogin::class, SystemLog::class)]
 class InstallController extends BaseController
@@ -50,12 +52,14 @@ class InstallController extends BaseController
      */
     public function index(Request $request): Response
     {
+        $managementCatalog = Factory::enabled() ? Factory::manager()->catalog() : [];
         $data = Server::installedList(runtime_path() . DIRECTORY_SEPARATOR . 'saipackage' . DIRECTORY_SEPARATOR);
 
         // 补上数据库兼容性：老版插件只有 MySQL 的 install.sql，在 PG 下装不了，
         // 列表里就要看得出来，不能等点了安装才报错
         foreach ($data as &$item) {
             $item = array_merge($item, InstallLogic::dbSupport((string) ($item['app'] ?? '')));
+            $item['management'] = $managementCatalog[$item['app']] ?? null;
         }
         unset($item);
 
@@ -153,6 +157,16 @@ class InstallController extends BaseController
         if (empty($appName)) {
             return $this->fail('参数错误');
         }
+        if (Factory::enabled()) {
+            $manager = Factory::manager();
+            $lock = $manager->lock();
+            $plan = $manager->plan($appName);
+            if (array_keys($plan['steps']) !== [$appName]) {
+                return $this->fail('请先预览并提交完整的插件依赖安装计划');
+            }
+            $taskId = (new Tasks($manager))->submit($appName, $plan['fingerprint'], (int) $this->adminId);
+            return $this->success(['taskId' => $taskId, 'state' => 'queued']);
+        }
         $install = new InstallLogic($appName);
         $info = $install->install();
         UserMenuCache::clearMenuCache();
@@ -170,6 +184,16 @@ class InstallController extends BaseController
         $appName = $request->post("appName", '');
         if (empty($appName)) {
             return $this->fail('参数错误');
+        }
+        if (Factory::enabled()) {
+            $manager = Factory::manager();
+            $installation = $manager->store->get('installations', $appName)['value'] ?? null;
+            if (!$installation || $installation['state'] === 'uninstalled') {
+                (new InstallLogic($appName))->uninstall(false);
+                return $this->success('已清理待安装插件包');
+            }
+            $taskId = (new Tasks($manager))->submitUninstall($appName, (int) $this->adminId);
+            return $this->success(['taskId' => $taskId, 'state' => 'queued']);
         }
         $install = new InstallLogic($appName);
         $warnings = $install->uninstall();

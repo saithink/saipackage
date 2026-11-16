@@ -152,6 +152,8 @@ class Terminal
             }
         }
 
+        $managementLock = \Saithink\Saipackage\management\Factory::enabled()
+            ? \Saithink\Saipackage\management\Factory::manager()->lock() : null;
         $this->beforeExecution();
         yield $this->output('connection-success');
 
@@ -274,7 +276,7 @@ class Terminal
                 $install = new InstallLogic($value);
                 $install->dependentInstallComplete('composer');
                 // 重启后端
-                Server::restart();
+                \plugin\saipackage\app\logic\InstallLogic::restartServer();
             }
         }
         return true;
